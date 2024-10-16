@@ -1,0 +1,17 @@
+# Ignore Python package directories
+__pycache__/
+bin/
+images/
+include/
+lib/
+models/
+share/
+pyvenv.config
+env/
+venv/
+*.pyc
+*.pyo
+
+# Ignore system files
+.DS_Store
+*.log
