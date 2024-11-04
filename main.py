@@ -71,9 +71,7 @@ for city, bounds in city_bounds.items():
         
         # Prevent an infinite loop (limit to 20 attempts, adjust as needed)
         if attempts >= 100:
-            print(f"Stopped after 20 attempts for {city}")
-            break
+            print(f"Stopped after 50 attempts for {city}")
+            
     
-    break
-
     print(f"Total successful images for {city}: {successful_images}")

@@ -1,18 +1,18 @@
 # bounds.py
 
 city_bounds = {
-    "Washington_D.C.": {
-        "north": 39.00,
-        "south": 38.79,
-        "west": -77.12,
-        "east": -76.91
-    },
-    "Beijing": {
-        "north": 40.00,
-        "south": 39.80,
-        "west": 116.20,
-        "east": 116.60
-    },
+    # "Washington_D.C.": {
+    #     "north": 39.00,
+    #     "south": 38.79,
+    #     "west": -77.12,
+    #     "east": -76.91
+    # },
+    # "Beijing": {
+    #     "north": 40.00,
+    #     "south": 39.80,
+    #     "west": 116.20,
+    #     "east": 116.60
+    # },
     "Tokyo": {
         "north": 35.80,
         "south": 35.60,
