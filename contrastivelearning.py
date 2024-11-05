@@ -1,30 +1,42 @@
+import h5py
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torchvision import models, transforms
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
+from PIL import Image
+from geopy.distance import geodesic
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+from torchvision import transforms
+from torch.utils.data import DataLoader
+import torch.nn as nn
+from torchvision import models
+import torch.optim as optim
 
 
-class ImageCoordinatesDataset(Dataset):
-    def __init__(self, images, coordinates, transform=None):
-        self.images = images
-        self.coordinates = coordinates  # list of (latitude, longitude) tuples
+
+class HDF5ContrastiveDataset(Dataset):
+    def __init__(self, hdf5_path, transform=None, pos_threshold=0.5, neg_threshold=5.0):
+        # Open the HDF5 file and store paths and coordinates
+        self.hdf5_path = hdf5_path
+        self.hdf = h5py.File(hdf5_path, 'r')
+        self.image_paths = [path.decode('utf-8') for path in self.hdf['image_paths']]
+        self.coordinates = list(zip(self.hdf['latitudes'][:], self.hdf['longitudes'][:]))
         self.transform = transform
+        self.pos_threshold = pos_threshold  # Distance in km for positive pairs
+        self.neg_threshold = neg_threshold  # Distance in km for negative pairs
+
+    def __len__(self):
+        return len(self.image_paths)
 
     def __getitem__(self, index):
-        # Fetch the anchor image and coordinate
-        anchor_img = self.images[index]
+        # Load the anchor image and coordinate
+        anchor_img = self._load_image(self.image_paths[index])
         anchor_coord = self.coordinates[index]
 
-        # Find a positive sample (close in coordinates)
-        pos_index = self._find_positive_sample(index, threshold=0.1)  # example threshold
-        pos_img = self.images[pos_index]
+        # Find positive and negative samples
+        pos_index = self._find_positive_sample(index)
+        neg_index = self._find_negative_sample(index)
 
-        # Find a negative sample (far in coordinates)
-        neg_index = self._find_negative_sample(index, threshold=1.0)  # example threshold
-        neg_img = self.images[neg_index]
+        pos_img = self._load_image(self.image_paths[pos_index])
+        neg_img = self._load_image(self.image_paths[neg_index])
 
         # Apply transforms if provided
         if self.transform:
@@ -34,18 +46,29 @@ class ImageCoordinatesDataset(Dataset):
 
         return anchor_img, pos_img, neg_img
 
-    def __len__(self):
-        return len(self.images)
+    def _load_image(self, img_path):
+        # Load image from path and convert to RGB
+        return Image.open(img_path).convert('RGB')
 
-    def _find_positive_sample(self, index, threshold):
-        # Logic to find positive sample within a distance threshold
-        # For simplicity, replace with a basic search, ideally use geospatial distance
-        return (index + 1) % len(self.images)
+    def _find_positive_sample(self, index):
+        anchor_coord = self.coordinates[index]
+        for i, coord in enumerate(self.coordinates):
+            if i != index and geodesic(anchor_coord, coord).km <= self.pos_threshold:
+                return i
+        # Fallback: return the next index if no close pair found
+        return (index + 1) % len(self.coordinates)
 
-    def _find_negative_sample(self, index, threshold):
-        # Logic to find negative sample outside a distance threshold
-        return (index + 2) % len(self.images)
-
+    def _find_negative_sample(self, index):
+        anchor_coord = self.coordinates[index]
+        for i, coord in enumerate(self.coordinates):
+            if i != index and geodesic(anchor_coord, coord).km >= self.neg_threshold:
+                return i
+        # Fallback: return the next index if no distant pair found
+        return (index + 2) % len(self.coordinates)
+    
+    def close(self):
+        # Close the HDF5 file when done
+        self.hdf.close()
 
 
 class ContrastiveModel(nn.Module):
@@ -54,7 +77,7 @@ class ContrastiveModel(nn.Module):
         self.encoder = models.resnet18(pretrained=True)
         self.encoder.fc = nn.Identity()  # Remove final classification layer
         self.projection_head = nn.Sequential(
-            nn.Linear(512, 128),  # Adjust input size if using a different model
+            nn.Linear(512, 128),
             nn.ReLU(),
             nn.Linear(128, 64)
         )
@@ -64,15 +87,18 @@ class ContrastiveModel(nn.Module):
         projection = self.projection_head(features)
         return projection
 
+def contrastive_loss(anchor, positive, negative, margin=1.0):
+    pos_dist = torch.norm(anchor - positive, dim=1)
+    neg_dist = torch.norm(anchor - negative, dim=1)
+    loss = torch.mean(torch.clamp(margin + pos_dist - neg_dist, min=0))
+    return loss
 
-def contrastive_loss(anchor, positive, negative, margin=0.5):
-    # Calculate cosine similarity
-    pos_sim = cosine_similarity(anchor, positive)
-    neg_sim = cosine_similarity(anchor, negative)
 
-    # Compute contrastive loss
-    loss = torch.clamp(margin - pos_sim + neg_sim, min=0)
-    return loss.mean()
+
+# Initialize model, loss, and optimizer
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = ContrastiveModel().to(device)
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
 # Define transforms
 transform = transforms.Compose([
@@ -80,18 +106,17 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# Load data
-dataset = ImageCoordinatesDataset(images=your_images, coordinates=your_coords, transform=transform)
+# Create dataset and dataloader
+hdf5_path = './image_data.h5'
+dataset = HDF5ContrastiveDataset(hdf5_path=hdf5_path, transform=transform)
 dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-# Initialize model, optimizer
-model = ContrastiveModel().to(device)
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
-
 # Training loop
-num_epochs = 10
+num_epochs = 1
 for epoch in range(num_epochs):
+    model.train()
     total_loss = 0
+
     for anchor, positive, negative in dataloader:
         anchor, positive, negative = anchor.to(device), positive.to(device), negative.to(device)
 
@@ -111,4 +136,19 @@ for epoch in range(num_epochs):
 
     print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss/len(dataloader):.4f}")
 
+embeddings_with_coords = []
+model.eval()
+with torch.no_grad():
+    for i in range(len(dataset)):
+        img, _, _ = dataset[i]
+        img = img.unsqueeze(0).to(device)
+        embedding = model(img).cpu().numpy().flatten()
+        coord = dataset.coordinates[i]
+        embeddings_with_coords.append((embedding, coord))
 
+torch.save(model.state_dict(), "./contrastive_model.pth")
+
+# Save embeddings and coordinates in a pickle file, JSON, or another HDF5 file for future use
+# import pickle
+# with open("embeddings_with_coords.pkl", "wb") as f:
+#     pickle.dump(embeddings_with_coords, f)
