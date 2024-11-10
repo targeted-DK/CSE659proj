@@ -1,5 +1,16 @@
+import h5py
 import torch
-import pickle
+from torch.utils.data import Dataset
+from PIL import Image
+from geopy.distance import geodesic
+import numpy as np
+from torchvision import transforms
+from torch.utils.data import DataLoader
+import torch.nn as nn
+from torchvision import models
+import torch.optim as optim
+
+model_path = "./contrastive_model.pth"
 
 # Load the trained model weights (if saved) and set the model to evaluation mode
 model = ContrastiveModel()
